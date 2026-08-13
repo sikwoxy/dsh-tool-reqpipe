@@ -1,0 +1,56 @@
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  publish-npm:
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugin
+    permissions:
+      contents: read
+      id-token: write   # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
+          cache-dependency-path: plugin/pnpm-lock.yaml
+      - name: Install & build
+        run: pnpm install --frozen-lockfile && pnpm build
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-pypi:
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python-cli
+    permissions:
+      id-token: write   # trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build
+        run: |
+          python3 -m pip install --upgrade build
+          python3 -m build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

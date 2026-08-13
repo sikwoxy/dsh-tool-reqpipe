@@ -1,0 +1,19 @@
+# Node / plugin
+node_modules/
+lib/
+dist/
+*.tsbuildinfo
+*.tgz
+
+# Python / python-cli
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

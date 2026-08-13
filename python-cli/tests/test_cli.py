@@ -1,0 +1,169 @@
+"""CLI 端到端测试：子命令、错误处理、环境变量、子进程冒烟。"""
+
+import json
+import os
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+from helpers import ReqPipeTestCase
+
+
+class CliBasicsTests(ReqPipeTestCase):
+    def test_version(self):
+        code, out, _ = self.run_cli("--version", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("reqpipe", out)
+
+    def test_help_lists_commands(self):
+        code, out, _ = self.run_cli("--help", root=self.root)
+        self.assertEqual(code, 0)
+        for cmd in ("init", "create", "advance", "skip", "list", "show", "checklist"):
+            self.assertIn(cmd, out)
+
+    def test_init(self):
+        code, out, _ = self.run_cli("init", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertTrue((self.root / "README.md").is_file())
+
+    def test_unknown_command_fails(self):
+        code, _, _ = self.run_cli("frobnicate", root=self.root)
+        self.assertEqual(code, 2)
+
+
+class CliFlowTests(ReqPipeTestCase):
+    def test_create_and_advance(self):
+        code, out, _ = self.run_cli("create", "登录模块", "--id", "REQ-1", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("REQ-1", out)
+        code, out, _ = self.run_cli("advance", "REQ-1", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("需求 阶段已完成", out)
+
+    def test_light_flow_via_cli(self):
+        self.run_cli("create", "小需求", "--id", "REQ-1", "--light", root=self.root)
+        self.run_cli("advance", "REQ-1", root=self.root)
+        code, out, _ = self.run_cli("skip", "REQ-1", "design", "--reason", "轻量", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("已跳过", out)
+        self.run_cli("skip", "REQ-1", "review", "--reason", "轻量", root=self.root)
+        self.run_cli("advance", "REQ-1", root=self.root)
+        code, out, _ = self.run_cli("list", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("已完成", out)
+        self.assertIn("轻量", out)
+
+    def test_skip_with_chinese_stage_label(self):
+        self.run_cli("create", "x", "--id", "REQ-1", root=self.root)
+        code, out, _ = self.run_cli("skip", "REQ-1", "方案", "--reason", "r", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("已跳过", out)
+
+    def test_skip_without_reason_rejected(self):
+        self.run_cli("create", "x", "--id", "REQ-1", root=self.root)
+        code, _, _ = self.run_cli("skip", "REQ-1", "design", root=self.root)
+        self.assertNotEqual(code, 0)
+
+    def test_skip_requirement_rejected(self):
+        self.run_cli("create", "x", "--id", "REQ-1", root=self.root)
+        code, _, err = self.run_cli("skip", "REQ-1", "requirement", "--reason", "r", root=self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("不允许跳过", err)
+
+    def test_show(self):
+        self.run_cli("create", "x", "--id", "REQ-1", root=self.root)
+        code, out, _ = self.run_cli("show", "REQ-1", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("REQ-1", out)
+
+    def test_show_missing_id_fails(self):
+        code, _, err = self.run_cli("show", "NOPE", root=self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("未找到", err)
+
+    def test_list_json(self):
+        self.run_cli("create", "x", "--id", "REQ-1", root=self.root)
+        code, out, _ = self.run_cli("list", "--json", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertIn('"id": "REQ-1"', out)
+
+    def test_list_json_empty_root(self):
+        code, out, _ = self.run_cli("list", "--json", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), [])
+
+    def test_checklist_stdout_and_file(self):
+        self.run_cli("create", "x", "--id", "REQ-1", root=self.root)
+        code, out, _ = self.run_cli("checklist", "REQ-1", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("提交清单", out)
+        out_file = self.root / "CHECK.md"
+        code, out, _ = self.run_cli("checklist", "REQ-1", "-o", str(out_file), root=self.root)
+        self.assertEqual(code, 0)
+        self.assertTrue(out_file.is_file())
+        self.assertIn("提交清单", out_file.read_text(encoding="utf-8"))
+
+    def test_create_json(self):
+        code, out, _ = self.run_cli("create", "登录模块", "--id", "REQ-1", "--light", "--json", root=self.root)
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(data["id"], "REQ-1")
+        self.assertTrue(data["light"])
+        self.assertEqual(len(data["stages"]), 4)
+
+    def test_advance_json(self):
+        self.run_cli("create", "x", "--id", "REQ-1", root=self.root)
+        code, out, _ = self.run_cli("advance", "REQ-1", "--json", root=self.root)
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertIn("pipeline", data)
+        self.assertIn("messages", data)
+        self.assertEqual(data["pipeline"]["stages"][0]["status"], "done")
+        self.assertTrue(any("需求 阶段已完成" in m for m in data["messages"]))
+
+    def test_skip_json_records_reason(self):
+        self.run_cli("create", "x", "--id", "REQ-1", root=self.root)
+        code, out, _ = self.run_cli("skip", "REQ-1", "design", "--reason", "太简单", "--json", root=self.root)
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        design = data["pipeline"]["stages"][1]
+        self.assertEqual(design["status"], "skipped")
+        self.assertEqual(design["reason"], "太简单")
+
+    def test_checklist_json(self):
+        self.run_cli("create", "x", "--id", "REQ-1", root=self.root)
+        code, out, _ = self.run_cli("checklist", "REQ-1", "--json", root=self.root)
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertIn("markdown", data)
+        self.assertIn("# 提交清单", data["markdown"])
+
+    def test_root_flag_position_agnostic(self):
+        code, out, _ = self.run_cli("create", "x", "--id", "REQ-1", "--root", str(self.root))
+        self.assertEqual(code, 0)
+        self.assertTrue((self.root / "REQ-1").is_dir())
+
+    def test_env_root(self):
+        os.environ["REQPIPE_ROOT"] = str(self.root)
+        try:
+            code, out, _ = self.run_cli("create", "env需求", "--id", "REQ-1")
+            self.assertEqual(code, 0)
+            self.assertTrue((self.root / "REQ-1").is_dir())
+        finally:
+            del os.environ["REQPIPE_ROOT"]
+
+    def test_module_smoke(self):
+        repo = Path(__file__).resolve().parents[1]
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(repo)
+        r = subprocess.run(
+            [sys.executable, "-m", "reqpipe", "--version"],
+            cwd=str(repo), env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("reqpipe", r.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

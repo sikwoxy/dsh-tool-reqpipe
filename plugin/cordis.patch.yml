@@ -1,0 +1,13 @@
+# dsh-tool-reqpipe 组合包：向 profile 插入插件行。
+
+# 安装后按包名引用，Node 从 node_modules 解析到预构建的 lib/index.js。
+- insert:
+    - id: reqpipe
+      name: dsh-tool-reqpipe
+      config:
+        # reqpipeBin: 'reqpipe'        # 默认：PATH 中的 reqpipe（pip install reqpipe）
+        # reqpipeBin: '/path/to/reqpipe'
+        # reqpipeArgs: ['-m', 'reqpipe']
+        # root: '/abs/path/to/pipelines'
+        # env:
+        #   REQPIPE_ROOT: '/abs/path/to/pipelines'
