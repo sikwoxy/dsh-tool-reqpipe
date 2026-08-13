@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reqpipe"
-version = "0.1.0"
+version = "0.1.1"
 description = "研发团队需求流水线管理工具：需求 → 方案 → 评审 → 开发"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "MIT" }
+license = "MIT"
 keywords = ["cli", "pipeline", "requirement", "流水线", "研发"]
 classifiers = [
     "Environment :: Console",
