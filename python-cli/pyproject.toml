@@ -23,7 +23,7 @@ reqpipe = "reqpipe.cli:main"
 [project.urls]
 Homepage = "https://github.com/sikwoxy/dsh-tool-reqpipe"
 Source = "https://github.com/sikwoxy/dsh-tool-reqpipe"
-Bug Tracker = "https://github.com/sikwoxy/dsh-tool-reqpipe/issues"
+"Bug Tracker" = "https://github.com/sikwoxy/dsh-tool-reqpipe/issues"
 
 [project.optional-dependencies]
 test = ["pytest"]
