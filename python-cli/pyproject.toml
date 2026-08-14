@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reqpipe"
-version = "0.1.1"
+version = "0.2.0"
 description = "研发团队需求流水线管理工具：需求 → 方案 → 评审 → 开发"
 readme = "README.md"
 requires-python = ">=3.8"
