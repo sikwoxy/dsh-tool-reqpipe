@@ -3,12 +3,13 @@
  * 断言规范值（result.value）与渲染文本（result.content）。
  *
  * 测试通过 `python3 -m reqpipe` 调用 reqpipe CLI；CLI 源码位置由
- * REQPIPE_SRC 环境变量指定（默认指向开发工作区中的 Python 包）。
+ * REQPIPE_SRC 环境变量指定（默认指向仓库内的 python-cli 包）。
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { CallId } from '@deepseek-ai/dsh-llm'
@@ -16,8 +17,9 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { type ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { apply, Config } from '../src/index.ts'
 
-/** reqpipe Python 源码目录（PYTHONPATH 指向它），可用环境变量覆盖。 */
-const REQPIPE_SRC = process.env.REQPIPE_SRC ?? '/Users/siwoxi/Documents/idea/playground/reqpipe'
+/** reqpipe Python 源码目录（PYTHONPATH 指向它），可用环境变量覆盖；默认探测仓库内 python-cli。 */
+const REQPIPE_SRC =
+  process.env.REQPIPE_SRC ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'python-cli')
 
 const testSignal = new AbortController().signal
 let root: string
