@@ -3,6 +3,7 @@
 > 为研发团队把每个需求拆成 4 个阶段（**需求 → 方案 → 评审 → 开发**），
 > 每个需求一个工作目录，阶段产物有约定的目录命名与文档格式；
 > 支持跳过 方案/评审 的轻量流程（跳过必须记录原因）。
+> **评审必须由方案作者以外的身份完成**（另一个 agent 或人工），`reject` 打回返工。
 
 本仓库包含两个可分发包：
 
@@ -34,16 +35,19 @@ dsh plugin add dsh-tool-reqpipe
 | --- | --- | --- |
 | `reqpipe_init` | — | 初始化流水线根目录（通常无需手动调用） |
 | `reqpipe_create` | `title`（必填）, `id?`, `description?`, `light?` | 创建需求 |
-| `reqpipe_advance` | `id`（必填）, `force?` | 推进阶段（自动生成下一阶段文档模板） |
-| `reqpipe_skip` | `id`, `stage: design\|review`, `reason`（必填） | 跳过方案/评审（轻量流程，原因留档） |
+| `reqpipe_advance` | `id`（必填）, `force?` | 推进阶段（需求/方案/开发），自动生成下一阶段文档模板；评审阶段须用 `reqpipe_review` |
+| `reqpipe_review` | `id`, `reviewer`（必填，≠方案作者）, `verdict: approve\|reject`, `comment?` | 评审方案：通过进入开发，不通过打回返工；评审人/结论/意见留档 |
+| `reqpipe_skip` | `id`, `stage: design\|review`, `reason`（必填） | 跳过方案/评审（轻量流程，原因留档）；方案作者不能跳过自己的评审 |
 | `reqpipe_list` | — | 列出所有流水线 |
-| `reqpipe_show` | `id` | 查看详情（阶段状态、跳过原因、历史） |
+| `reqpipe_show` | `id` | 查看详情（阶段状态、操作者、评审记录、跳过原因、历史） |
 | `reqpipe_checklist` | `id` | 生成提交清单（Markdown） |
 
 示例对话：
 
 > - “创建一个需求：支持导出 CSV，轻量流程”
-> - “推进 REQ-001”
+> - “推进 REQ-001”（需求 → 方案）
+> - “拉一个独立 agent 评审 REQ-001 的方案，通过”（`reqpipe_review`，评审人 ≠ 方案作者）
+> - “评审不通过，打回返工”（`reqpipe_review` verdict=reject）
 > - “跳过 REQ-002 的方案阶段，理由是改动太小”
 > - “给 REQ-003 生成一份提交清单”
 
@@ -51,7 +55,8 @@ dsh plugin add dsh-tool-reqpipe
 
 ```bash
 reqpipe create "登录模块支持记住我" --light
-reqpipe advance REQ-001
+reqpipe advance REQ-001 --by alice
+reqpipe review REQ-001 --by bob --verdict approve --comment "方案可行"
 reqpipe skip REQ-001 design --reason "交互简单，无需方案文档"
 reqpipe list
 reqpipe checklist REQ-001 -o COMMIT_CHECKLIST.md

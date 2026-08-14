@@ -67,6 +67,7 @@ class AdvanceTests(ReqPipeTestCase):
         p = load_pipeline(self.root, "REQ-1")
         msgs = p.advance()
         self.assertEqual(p.stage("requirement")["status"], "done")
+        self.assertEqual(p.stage("requirement")["done_by"], "anonymous")
         self.assertEqual(p.stage("design")["status"], "pending")
         self.assertTrue((p.dir / "02-design" / "DESIGN.md").is_file())
         self.assertEqual(p.current()["name"], "design")
@@ -80,10 +81,28 @@ class AdvanceTests(ReqPipeTestCase):
         p.advance(force=True)
         self.assertEqual(p.stage("requirement")["status"], "done")
 
+    def test_advance_records_actor(self):
+        p = load_pipeline(self.root, "REQ-1")
+        p.advance(by="alice")
+        self.assertEqual(p.stage("requirement")["done_by"], "alice")
+        p.advance(by="alice")
+        self.assertEqual(p.stage("design")["done_by"], "alice")
+
+    def test_advance_review_stage_forbidden(self):
+        """评审阶段不能 advance 直接推进——必须走 review 动作，防止自写自评。"""
+        p = load_pipeline(self.root, "REQ-1")
+        p.advance(by="alice")
+        p.advance(by="alice")
+        self.assertEqual(p.current()["name"], "review")
+        with self.assertRaises(StageError):
+            p.advance(by="alice")
+
     def test_full_flow_to_completion(self):
         p = load_pipeline(self.root, "REQ-1")
-        for _ in range(4):
-            p.advance()
+        p.advance(by="alice")             # 需求
+        p.advance(by="alice")             # 方案（作者 alice）
+        p.review(by="bob", verdict="approve")  # 评审（评审人 bob ≠ alice）
+        p.advance(by="alice")             # 开发
         self.assertTrue(p.completed())
         self.assertIsNone(p.current())
         with self.assertRaises(StageError):
@@ -147,6 +166,124 @@ class SkipTests(ReqPipeTestCase):
         detail = next(h["detail"] for h in p.data["history"] if h["action"] == "skip")
         self.assertIn("太简单", detail)
 
+    def test_skip_records_actor(self):
+        p = load_pipeline(self.root, "REQ-1")
+        p.skip("design", "太简单", by="alice")
+        st = p.stage("design")
+        self.assertEqual(st["skipped_by"], "alice")
+
+    def test_author_cannot_skip_own_review(self):
+        """方案作者不能跳过自己方案的评审。"""
+        p = load_pipeline(self.root, "REQ-1")
+        p.advance(by="alice")
+        p.advance(by="alice")
+        with self.assertRaises(SkipError):
+            p.skip("review", "不需要评审", by="alice")
+
+    def test_other_can_skip_review(self):
+        """非方案作者（其他 agent / 人工）可以跳过评审，须记录原因与身份。"""
+        p = load_pipeline(self.root, "REQ-1")
+        p.advance(by="alice")
+        p.advance(by="alice")
+        msgs = p.skip("review", "团队口头评审通过", by="bob")
+        self.assertEqual(p.stage("review")["status"], "skipped")
+        self.assertEqual(p.stage("review")["skipped_by"], "bob")
+        self.assertTrue(any("已跳过" in m for m in msgs))
+
+    def test_skip_review_while_design_in_rework_forbidden(self):
+        p = load_pipeline(self.root, "REQ-1")
+        p.advance(by="alice")
+        p.advance(by="alice")
+        p.review(by="bob", verdict="reject")
+        with self.assertRaises(SkipError):
+            p.skip("review", "算了", by="carol")
+
+
+class ReviewTests(ReqPipeTestCase):
+    def setUp(self):
+        super().setUp()
+        create_pipeline(self.root, "导出优化", req_id="REQ-1")
+
+    def _to_review(self):
+        p = load_pipeline(self.root, "REQ-1")
+        p.advance(by="alice")   # 需求
+        p.advance(by="alice")   # 方案（作者 alice）
+        return p
+
+    def test_review_requires_design_done(self):
+        p = load_pipeline(self.root, "REQ-1")
+        with self.assertRaises(StageError):
+            p.review(by="bob", verdict="approve")
+
+    def test_review_requires_explicit_reviewer(self):
+        p = self._to_review()
+        with self.assertRaises(StageError):
+            p.review(by="", verdict="approve")
+        with self.assertRaises(StageError):
+            p.review(by=None, verdict="approve")
+
+    def test_author_cannot_review_own_design(self):
+        p = self._to_review()
+        with self.assertRaises(StageError):
+            p.review(by="alice", verdict="approve")
+
+    def test_invalid_verdict_rejected(self):
+        p = self._to_review()
+        with self.assertRaises(StageError):
+            p.review(by="bob", verdict="maybe")
+
+    def test_approve_completes_review_and_enters_development(self):
+        p = self._to_review()
+        msgs = p.review(by="bob", verdict="approve", comment="方案可行")
+        review_stage = p.stage("review")
+        self.assertEqual(review_stage["status"], "done")
+        self.assertEqual(review_stage["done_by"], "bob")
+        self.assertEqual(p.current()["name"], "development")
+        self.assertTrue((p.dir / "04-development" / "DEVELOPMENT.md").is_file())
+        # REVIEW.md 已落盘，包含评审记录
+        review_doc = (p.dir / "03-review" / "REVIEW.md")
+        self.assertTrue(review_doc.is_file())
+        content = review_doc.read_text(encoding="utf-8")
+        self.assertIn("bob", content)
+        self.assertIn("通过", content)
+        self.assertIn("方案可行", content)
+        self.assertTrue(any("评审通过" in m for m in msgs))
+
+    def test_reject_sends_design_back_to_rework(self):
+        p = self._to_review()
+        msgs = p.review(by="bob", verdict="reject", comment="选型有风险")
+        design = p.stage("design")
+        review_stage = p.stage("review")
+        self.assertEqual(design["status"], "rejected")
+        self.assertEqual(review_stage["status"], "pending")
+        self.assertEqual(p.current()["name"], "design")  # 回到方案返工
+        self.assertEqual(len(review_stage["reviews"]), 1)
+        self.assertTrue(any("打回返工" in m for m in msgs))
+
+    def test_rework_loop_until_approved(self):
+        """拒绝 → 返工 → 再评审 → 通过，形成闭环。"""
+        p = self._to_review()
+        p.review(by="bob", verdict="reject", comment="需要补充测试方案")
+        # 返工：重新完善 DESIGN.md 后推进方案
+        p.advance(by="alice")
+        self.assertEqual(p.stage("design")["status"], "done")
+        self.assertEqual(p.current()["name"], "review")
+        p.review(by="bob", verdict="approve", comment="补充后可行")
+        review_stage = p.stage("review")
+        self.assertEqual(review_stage["status"], "done")
+        self.assertEqual(len(review_stage["reviews"]), 2)  # 两轮评审都留档
+        p.advance(by="alice")
+        self.assertTrue(p.completed())
+
+    def test_review_writes_history(self):
+        p = self._to_review()
+        p.review(by="bob", verdict="reject", comment="不行")
+        actions = [h["action"] for h in p.data["history"]]
+        self.assertIn("review", actions)
+        detail = next(h["detail"] for h in p.data["history"] if h["action"] == "review")
+        self.assertIn("bob", detail)
+        self.assertIn("不行", detail)
+
 
 class ListingTests(ReqPipeTestCase):
     def test_list_pipelines_sorted(self):
@@ -181,7 +318,7 @@ class ChecklistTests(ReqPipeTestCase):
         p = load_pipeline(self.root, "REQ-1")
         p.skip("design", "r")
         text = p.checklist()
-        self.assertIn("已完成：0 个阶段；已跳过：1 个；待完成：3 个", text)
+        self.assertIn("已完成：0 个阶段；已跳过：1 个；需返工：0 个；待完成：3 个", text)
 
     def test_checklist_lists_done_stage_files(self):
         p = load_pipeline(self.root, "REQ-1")
@@ -208,10 +345,22 @@ class LightFlowTests(ReqPipeTestCase):
     def test_standard_flow_stays_complete(self):
         create_pipeline(self.root, "标准需求", req_id="REQ-1", light=False)
         p = load_pipeline(self.root, "REQ-1")
-        for _ in range(4):
-            p.advance()
+        p.advance(by="alice")
+        p.advance(by="alice")
+        p.review(by="bob", verdict="approve")
+        p.advance(by="alice")
         self.assertTrue(p.completed())
         self.assertFalse(p.light)
+
+    def test_checklist_marks_rejected_stage(self):
+        create_pipeline(self.root, "导出优化", req_id="REQ-1")
+        p = load_pipeline(self.root, "REQ-1")
+        p.advance(by="alice")
+        p.advance(by="alice")
+        p.review(by="bob", verdict="reject")
+        text = p.checklist()
+        self.assertIn("需返工", text)
+        self.assertIn("评审未通过", text)
 
 
 if __name__ == "__main__":

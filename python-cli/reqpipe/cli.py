@@ -20,7 +20,7 @@ from .pipeline import (
     load_pipeline,
 )
 
-_STATUS_TEXT = {"pending": "待开始", "done": "已完成", "skipped": "已跳过"}
+_STATUS_TEXT = {"pending": "待开始", "done": "已完成", "skipped": "已跳过", "rejected": "需返工"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,13 +42,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="以 JSON 输出（pipeline 清单）")
     p.set_defaults(handler=cmd_create)
 
-    p = sub.add_parser("advance", help="推进阶段（需求→方案→评审→开发）")
+    p = sub.add_parser("advance", help="推进阶段（需求→方案→评审→开发；评审阶段需用 review 命令）")
     p.add_argument("req_id", help="需求 ID")
     p.add_argument("--force", action="store_true", help="缺少阶段文档时强制推进")
+    p.add_argument("--by", default=None, help="操作者身份（默认：REQPIPE_ACTOR 环境变量或 anonymous）")
     p.add_argument("--json", action="store_true", help="以 JSON 输出（{pipeline, messages}）")
     p.set_defaults(handler=cmd_advance)
 
-    p = sub.add_parser("skip", help="跳过阶段（必须记录原因，仅支持 方案/评审）")
+    p = sub.add_parser("skip", help="跳过阶段（必须记录原因，仅支持 方案/评审；评审须由非方案作者执行）")
     p.add_argument("req_id", help="需求 ID")
     choices: List[str] = []
     for s in STAGES:
@@ -56,8 +57,17 @@ def build_parser() -> argparse.ArgumentParser:
         choices.append(s["label"])
     p.add_argument("stage", choices=choices, help="要跳过的阶段（design/方案、review/评审）")
     p.add_argument("--reason", required=True, help="跳过原因（必填）")
+    p.add_argument("--by", default=None, help="操作者身份（默认：REQPIPE_ACTOR 环境变量或 anonymous）")
     p.add_argument("--json", action="store_true", help="以 JSON 输出（{pipeline, messages}）")
     p.set_defaults(handler=cmd_skip)
+
+    p = sub.add_parser("review", help="评审方案（评审人须与方案作者不同；approve 进入开发，reject 打回返工）")
+    p.add_argument("req_id", help="需求 ID")
+    p.add_argument("--by", default=None, help="评审人身份（必填：其他 agent 的会话 id 或人工姓名）")
+    p.add_argument("--verdict", choices=["approve", "reject"], required=True, help="评审结论")
+    p.add_argument("--comment", default="", help="评审意见")
+    p.add_argument("--json", action="store_true", help="以 JSON 输出（{pipeline, messages}）")
+    p.set_defaults(handler=cmd_review)
 
     p = sub.add_parser("list", help="列出所有流水线")
     p.add_argument("--json", action="store_true", help="以 JSON 输出")
@@ -111,13 +121,19 @@ def _emit_messages(msgs: List[str], pipeline_data: Dict[str, Any], as_json: bool
 
 def cmd_advance(args: argparse.Namespace, root: Path) -> None:
     pipe = load_pipeline(root, args.req_id)
-    msgs = pipe.advance(force=args.force)
+    msgs = pipe.advance(force=args.force, by=args.by)
     _emit_messages(msgs, pipe.data, args.json)
 
 
 def cmd_skip(args: argparse.Namespace, root: Path) -> None:
     pipe = load_pipeline(root, args.req_id)
-    msgs = pipe.skip(args.stage, args.reason)
+    msgs = pipe.skip(args.stage, args.reason, by=args.by)
+    _emit_messages(msgs, pipe.data, args.json)
+
+
+def cmd_review(args: argparse.Namespace, root: Path) -> None:
+    pipe = load_pipeline(root, args.req_id)
+    msgs = pipe.review(by=args.by, verdict=args.verdict, comment=args.comment)
     _emit_messages(msgs, pipe.data, args.json)
 
 
@@ -136,6 +152,9 @@ def _summary(pipe) -> Dict[str, Any]:
                 "status": s["status"],
                 "reason": s.get("reason"),
                 "skipped_at": s.get("skipped_at"),
+                "done_by": s.get("done_by"),
+                "skipped_by": s.get("skipped_by"),
+                "reviews": s.get("reviews") or [],
             }
             for s in pipe.stages
         ],
@@ -181,10 +200,22 @@ def cmd_show(args: argparse.Namespace, root: Path) -> None:
     print()
     print("阶段：")
     for s in pipe.stages:
-        mark = {"done": "✔", "skipped": "⏭", "pending": "·"}[s["status"]]
+        mark = {"done": "✔", "skipped": "⏭", "pending": "·", "rejected": "✘"}[s["status"]]
         optional = "（可选）" if s["skippable"] else ""
-        extra = f"　跳过原因：{s['reason']}" if s["status"] == "skipped" else ""
+        extra = ""
+        if s["status"] == "skipped":
+            extra = f"　跳过原因：{s['reason']}（by {s.get('skipped_by') or '—'}）"
+        elif s["status"] == "done":
+            extra = f"　完成人：{s.get('done_by') or '—'}"
+        elif s["status"] == "rejected":
+            extra = f"　需返工（作者：{s.get('done_by') or '—'}）"
         print(f"  {mark} {s['label']}{optional}　{s['dir']}/{s['doc']}　[{_STATUS_TEXT[s['status']]}]{extra}")
+        reviews = s.get("reviews") or []
+        if reviews:
+            for r in reviews:
+                verdict = "通过" if r["verdict"] == "approve" else "不通过"
+                note = f"，意见：{r['comment']}" if r.get("comment") else ""
+                print(f"      · 评审[{verdict}] by {r['by']} @ {r['at']}{note}")
     print()
     print("历史：")
     for h in pipe.data["history"]:

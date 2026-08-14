@@ -19,7 +19,7 @@ class CliBasicsTests(ReqPipeTestCase):
     def test_help_lists_commands(self):
         code, out, _ = self.run_cli("--help", root=self.root)
         self.assertEqual(code, 0)
-        for cmd in ("init", "create", "advance", "skip", "list", "show", "checklist"):
+        for cmd in ("init", "create", "advance", "skip", "review", "list", "show", "checklist"):
             self.assertIn(cmd, out)
 
     def test_init(self):
@@ -163,6 +163,83 @@ class CliFlowTests(ReqPipeTestCase):
         )
         self.assertEqual(r.returncode, 0)
         self.assertIn("reqpipe", r.stdout)
+
+
+class CliReviewTests(ReqPipeTestCase):
+    """评审闸门：评审人 ≠ 方案作者，reject 打回返工。"""
+
+    def _create_and_advance_to_review(self):
+        self.run_cli("create", "导出优化", "--id", "REQ-1", root=self.root)
+        self.run_cli("advance", "REQ-1", "--by", "alice", root=self.root)
+        self.run_cli("advance", "REQ-1", "--by", "alice", root=self.root)
+
+    def test_advance_review_stage_rejected(self):
+        self._create_and_advance_to_review()
+        code, _, err = self.run_cli("advance", "REQ-1", "--by", "alice", root=self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("review 动作", err)
+
+    def test_review_requires_reviewer(self):
+        self._create_and_advance_to_review()
+        code, _, err = self.run_cli("review", "REQ-1", "--verdict", "approve", root=self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("评审人身份", err)
+
+    def test_self_review_rejected(self):
+        self._create_and_advance_to_review()
+        code, _, err = self.run_cli("review", "REQ-1", "--by", "alice", "--verdict", "approve", root=self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("不能评审自己的方案", err)
+
+    def test_review_approve_enters_development(self):
+        self._create_and_advance_to_review()
+        code, out, _ = self.run_cli("review", "REQ-1", "--by", "bob", "--verdict", "approve", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("评审通过", out)
+        code, out, _ = self.run_cli("list", "--json", root=self.root)
+        data = json.loads(out)
+        review = data[0]["stages"][2]
+        self.assertEqual(review["status"], "done")
+        self.assertEqual(review["done_by"], "bob")
+        self.assertEqual(data[0]["current_stage"], "development")
+
+    def test_reject_sends_back_to_rework(self):
+        self._create_and_advance_to_review()
+        code, out, _ = self.run_cli(
+            "review", "REQ-1", "--by", "bob", "--verdict", "reject",
+            "--comment", "选型有风险", root=self.root,
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("打回返工", out)
+        code, out, _ = self.run_cli("list", "--json", root=self.root)
+        data = json.loads(out)
+        self.assertEqual(data[0]["stages"][1]["status"], "rejected")
+        self.assertEqual(data[0]["current_stage"], "design")
+        self.assertEqual(len(data[0]["stages"][2]["reviews"]), 1)
+        self.assertIn("选型有风险", data[0]["stages"][2]["reviews"][0]["comment"])
+
+    def test_review_json_shape(self):
+        self._create_and_advance_to_review()
+        code, out, _ = self.run_cli("review", "REQ-1", "--by", "bob", "--verdict", "approve", "--json", root=self.root)
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertIn("pipeline", data)
+        self.assertIn("messages", data)
+        self.assertTrue(any("评审通过" in m for m in data["messages"]))
+
+    def test_author_cannot_skip_own_review_via_cli(self):
+        self._create_and_advance_to_review()
+        code, _, err = self.run_cli("skip", "REQ-1", "review", "--reason", "不需要", "--by", "alice", root=self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("不能跳过自己方案的评审", err)
+
+    def test_show_displays_review_records(self):
+        self._create_and_advance_to_review()
+        self.run_cli("review", "REQ-1", "--by", "bob", "--verdict", "reject", "--comment", "需返工", root=self.root)
+        code, out, _ = self.run_cli("show", "REQ-1", root=self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("需返工", out)
+        self.assertIn("bob", out)
 
 
 if __name__ == "__main__":

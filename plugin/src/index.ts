@@ -109,7 +109,7 @@ export function apply(ctx: Context, config: Config) {
 
   ctx.tools.register(defineTool({
     name: 'reqpipe_advance',
-    description: '推进需求的当前阶段（需求→方案→评审→开发）：完成当前阶段并进入下一阶段，自动生成下一阶段文档模板。要求当前阶段文档已存在，否则报错；force 为 true 时缺文档也可推进。返回 {pipeline, messages}。',
+    description: '推进需求的当前阶段（需求→方案→开发）：完成当前阶段并进入下一阶段，自动生成下一阶段文档模板。要求当前阶段文档已存在，否则报错；force 为 true 时缺文档也可推进。注意：评审（review）阶段不能 advance——必须用 reqpipe_review 完成评审，且评审人不能是方案作者（同一 agent 不能自写自评）。操作者身份自动取当前 agent 会话 id。返回 {pipeline, messages}。',
     parameters: {
       id: { type: 'string', required: true, description: '需求 ID，如 REQ-001' },
       force: { type: 'boolean', description: '当前阶段缺少文档时强制推进' },
@@ -121,14 +121,36 @@ export function apply(ctx: Context, config: Config) {
     async execute(args, exec) {
       const cliArgs = ['advance', '--json', args.id]
       if (args.force) cliArgs.push('--force')
+      if (exec.agent?.id) cliArgs.push('--by', exec.agent.id)
       return asObjectValue(await runner.runJson<StageChangeResult>(cliArgs, exec.signal))
     },
     presentCall: args => ({ card: 'generic', title: `推进阶段：${args.id}`, kind: 'execute' }),
   }))
 
   ctx.tools.register(defineTool({
+    name: 'reqpipe_review',
+    description: '评审需求的方案（design 阶段）：评审人必须与方案作者不同（同一 agent 不能自写自评），评审记录（评审人/结论/意见/时间）写入 REVIEW.md 与 pipeline.json 留档。verdict=approve 评审通过并进入开发；verdict=reject 评审不通过，方案阶段打回返工，重新完善 DESIGN.md 后再评审。评审人身份：由另一个 agent 会话 id 或人工评审的评审人姓名（reject 后返工再评审可多次调用，每轮留档）。',
+    parameters: {
+      id: { type: 'string', required: true, description: '需求 ID，如 REQ-001' },
+      reviewer: { type: 'string', required: true, description: '评审人身份：与方案作者不同的其他 agent 会话 id，或人工评审时的评审人姓名' },
+      verdict: { type: 'string', required: true, enum: ['approve', 'reject'], description: '评审结论：approve=通过，reject=不通过（打回返工）' },
+      comment: { type: 'string', description: '评审意见（可选）' },
+    },
+    output: {
+      schema: OBJECT_OUTPUT,
+      render: (_args, value) => text(renderChange(value as unknown as StageChangeResult)),
+    },
+    async execute(args, exec) {
+      const cliArgs = ['review', '--json', args.id, '--by', args.reviewer, '--verdict', args.verdict]
+      if (args.comment) cliArgs.push('--comment', args.comment)
+      return asObjectValue(await runner.runJson<StageChangeResult>(cliArgs, exec.signal))
+    },
+    presentCall: args => ({ card: 'generic', title: `评审方案：${args.id}（${args.verdict === 'approve' ? '通过' : '不通过'}）`, kind: 'other' }),
+  }))
+
+  ctx.tools.register(defineTool({
     name: 'reqpipe_skip',
-    description: '跳过需求的方案（design）或评审（review）阶段——轻量流程的入口。仅这两个阶段可跳过（需求/开发不可跳过），且必须提供原因 reason；原因会写入 pipeline.json 历史与提交清单，留档可查。返回 {pipeline, messages}。',
+    description: '跳过需求的方案（design）或评审（review）阶段——轻量流程的入口。仅这两个阶段可跳过（需求/开发不可跳过），且必须提供原因 reason；原因会写入 pipeline.json 历史与提交清单，留档可查。注意：方案作者不能跳过自己方案的评审（评审须由其他 agent 或人工决定）。操作者身份自动取当前 agent 会话 id。返回 {pipeline, messages}。',
     parameters: {
       id: { type: 'string', required: true, description: '需求 ID，如 REQ-001' },
       stage: {
@@ -142,10 +164,9 @@ export function apply(ctx: Context, config: Config) {
       render: (_args, value) => text(renderChange(value as unknown as StageChangeResult)),
     },
     async execute(args, exec) {
-      return asObjectValue(await runner.runJson<StageChangeResult>(
-        ['skip', '--json', args.id, args.stage, '--reason', args.reason],
-        exec.signal,
-      ))
+      const cliArgs = ['skip', '--json', args.id, args.stage, '--reason', args.reason]
+      if (exec.agent?.id) cliArgs.push('--by', exec.agent.id)
+      return asObjectValue(await runner.runJson<StageChangeResult>(cliArgs, exec.signal))
     },
     presentCall: args => ({ card: 'generic', title: `跳过阶段：${args.id} ${args.stage}`, kind: 'other' }),
   }))

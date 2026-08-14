@@ -93,6 +93,44 @@ def stage_template(stage_name: str, req_id: str, title: str) -> str:
     return tpl.format(id=req_id, title=title, created=_now())
 
 
+_VERDICT_TEXT = {"approve": "通过", "reject": "不通过"}
+
+
+def review_doc(req_id: str, title: str, reviews: list) -> str:
+    """把评审记录渲染为 REVIEW.md（每轮评审一节，保留全部历史）。"""
+    lines = [
+        f"# 评审记录：{title}",
+        "",
+        f"- 需求 ID：{req_id}",
+        f"- 最近更新：{_now()}",
+        f"- 阶段：评审",
+        "",
+    ]
+    if not reviews:
+        lines += [
+            "## 评审结论",
+            "- [ ] 通过",
+            "- [ ] 需修改",
+            "- [ ] 不通过",
+            "",
+            "## 评审意见",
+            "<!-- 逐条记录评审意见 -->",
+            "",
+        ]
+        return "\n".join(lines)
+    for i, r in enumerate(reviews, 1):
+        verdict = _VERDICT_TEXT.get(r["verdict"], r["verdict"])
+        lines += [
+            f"## 第 {i} 轮评审（{r['at']}）",
+            "",
+            f"- 评审人：{r['by']}",
+            f"- 结论：{verdict}",
+            f"- 意见：{r['comment'] or '（无）'}",
+            "",
+        ]
+    return "\n".join(lines)
+
+
 ROOT_README_TEMPLATE = """# 需求流水线根目录：{root}
 
 本目录由 reqpipe（研发需求流水线管理工具）管理。

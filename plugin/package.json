@@ -1,6 +1,6 @@
 {
   "name": "dsh-tool-reqpipe",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "DeepSeek Harness 插件：reqpipe 研发需求流水线管理工具（需求→方案→评审→开发），含 create/advance/skip/list/show/checklist 工具",
   "type": "module",
   "main": "lib/index.js",
